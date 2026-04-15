@@ -1,0 +1,59 @@
+services:
+  gateway:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./gateway:/app
+      - ./frontend:/frontend
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    command: sh -c "npm install && npx nodemon server.js"
+    networks:
+      - raft-net
+
+  replica1:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./replica1:/app
+    ports:
+      - "3001:3000"
+    environment:
+      - REPLICA_ID=replica1
+      - PEERS=replica2,replica3
+    command: sh -c "npm install && npx nodemon server.js"
+    networks:
+      - raft-net
+
+  replica2:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./replica2:/app
+    ports:
+      - "3002:3000"
+    environment:
+      - REPLICA_ID=replica2
+      - PEERS=replica1,replica3
+    command: sh -c "npm install && npx nodemon server.js"
+    networks:
+      - raft-net
+
+  replica3:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./replica3:/app
+    ports:
+      - "3003:3000"
+    environment:
+      - REPLICA_ID=replica3
+      - PEERS=replica1,replica2
+    command: sh -c "npm install && npx nodemon server.js"
+    networks:
+      - raft-net
+
+networks:
+  raft-net:
+    driver: bridge

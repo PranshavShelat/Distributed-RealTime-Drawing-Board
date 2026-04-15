@@ -1,0 +1,7 @@
+{
+  "name": "replica",
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.4.0"
+  }
+}
