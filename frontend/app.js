@@ -58,6 +58,21 @@ ws.onmessage = (event) => {
     } else if (data.type === 'stroke' && data.userName !== myUsername) {
         drawOnCanvas(data.startX, data.startY, data.endX, data.endY, data.color, data.isEraser, data.lineWidth);
         updateRemoteCursor(data.userName, data.endX, data.endY, data.color);
+    } 
+    // --- Catch the health-check broadcast for the Dashboard ---
+    else if (data.type === 'health-check') {
+        const list = document.getElementById('cluster-list');
+        if (list) {
+            list.innerHTML = data.data.map(node => {
+                // Color code the states
+                let stateColor = "white";
+                if (node.state === 'Leader') stateColor = "#4CAF50"; // Green
+                if (node.state === 'Candidate') stateColor = "#FFC107"; // Yellow
+                if (node.state === 'OFFLINE') stateColor = "#F44336"; // Red
+
+                return `<li>${node.status} <strong>${node.id.toUpperCase()}</strong>: <span style="color: ${stateColor};">${node.state}</span> (Term: ${node.term})</li>`;
+            }).join('');
+        }
     }
 };
 

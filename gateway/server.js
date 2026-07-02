@@ -86,4 +86,39 @@ async function forwardToLeader(stroke) {
     }
 }
 
+// --- Cluster Health Monitor ---
+setInterval(async () => {
+    const clusterStatus = [];
+    
+    // Ping all 3 replicas to check their state
+    for (let i = 1; i <= 3; i++) {
+        const replicaName = `replica${i}`;
+        try {
+            const res = await axios.get(`http://${replicaName}:3000/status`, { timeout: 500 });
+            clusterStatus.push({
+                id: replicaName,
+                state: res.data.state,
+                term: res.data.currentTerm || res.data.term || '?', 
+                status: '🟢'
+            });
+        } catch (e) {
+            // If the request fails or times out, the node is dead
+            clusterStatus.push({
+                id: replicaName,
+                state: 'OFFLINE',
+                term: '-',
+                status: '🔴'
+            });
+        }
+    }
+
+    // Broadcast the health data to all connected browser clients
+    const healthPayload = JSON.stringify({ type: 'health-check', data: clusterStatus });
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) { // 1 means WebSocket is OPEN
+            client.send(healthPayload);
+        }
+    });
+}, 2000); // Runs every 2 seconds
+
 app.listen(HTTP_PORT, () => console.log(`Gateway listening on port ${HTTP_PORT}`));

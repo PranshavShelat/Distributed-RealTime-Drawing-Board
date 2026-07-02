@@ -22,9 +22,10 @@ let commitIndex = -1;
 let electionTimeout = null;
 let heartbeatInterval = null;
 
-// --- RAFT core functions ---
+// --- RAFT Core Functions ---
 function resetElectionTimeout() {
     clearTimeout(electionTimeout);
+    // Randomized timeout between 500ms and 800ms to prevent split votes
     const timeout = Math.floor(Math.random() * (800 - 500 + 1) + 500);
     electionTimeout = setTimeout(startElection, timeout);
 }
@@ -52,11 +53,14 @@ async function startElection() {
             } else if (res.data.voteGranted) {
                 votes++;
             }
-        } catch (e) { /* Peer unreachable */ }
+        } catch (e) { 
+            // Peer is unreachable; ignore and continue
+        }
     });
 
     await Promise.all(votePromises);
 
+    // If we received a majority of votes, claim leadership
     if (state === 'Candidate' && votes > (PEERS.length + 1) / 2) {
         becomeLeader();
     }
@@ -65,10 +69,10 @@ async function startElection() {
 function becomeLeader() {
     state = 'Leader';
     currentLeader = REPLICA_ID;
-    console.log(`[${REPLICA_ID}] Term ${currentTerm}: BECAME LEADER`);
+    console.log(`[${REPLICA_ID}] Term ${currentTerm}: BECAME LEADER 👑`);
     clearTimeout(electionTimeout);
     
-    // Immediately send heartbeats
+    // Immediately send heartbeats to establish authority
     sendHeartbeats();
     heartbeatInterval = setInterval(sendHeartbeats, 150);
 }
@@ -94,7 +98,9 @@ async function sendHeartbeats() {
             if (res.data.term > currentTerm) {
                 stepDown(res.data.term);
             }
-        } catch (e) { /* Peer down */ }
+        } catch (e) { 
+            // Peer is unreachable; ignore and continue
+        }
     });
 }
 
@@ -128,7 +134,7 @@ app.post('/client-request', async (req, res) => {
 
     let acks = 1; // Self ack
 
-    // Replicate to followers
+    // Replicate to followers (2-Phase Commit)
     const replicationPromises = PEERS.map(async (peer) => {
         try {
             const res = await axios.post(`http://${peer}:3000/append-entries`, {
@@ -141,21 +147,25 @@ app.post('/client-request', async (req, res) => {
             if (res.data.success) {
                 acks++;
             } else if (res.data.needsSync) {
-                // Follower log is shorter, trigger catch-up
+                // Follower log is shorter, trigger catch-up protocol
                 syncFollower(peer, res.data.logLength);
             }
-        } catch (e) { /* Peer down */ }
+        } catch (e) { 
+            // Peer is down; ignore and continue
+        }
     });
 
     await Promise.all(replicationPromises);
 
-    // Commit if majority consensus reached
+    // Commit only if majority consensus is reached
     if (acks > (PEERS.length + 1) / 2) {
         commitIndex = entryIndex;
-        // Broadcast to Gateway
+        // Broadcast to Gateway so clients can render it
         try {
             await axios.post('http://gateway:8081/broadcast', stroke);
-        } catch (e) { console.error("Gateway broadcast failed"); }
+        } catch (e) { 
+            console.error(`[${REPLICA_ID}] Gateway broadcast failed`); 
+        }
         return res.json({ success: true });
     } else {
         return res.status(500).json({ success: false, error: "Consensus not reached" });
@@ -210,7 +220,7 @@ app.post('/append-entries', (req, res) => {
     res.json({ success: true, term: currentTerm });
 });
 
-// 5. Sync Log (Catch-up protocol)
+// 5. Sync Log (Catch-up protocol for restarted nodes)
 app.post('/sync-log', (req, res) => {
     const { entries, leaderCommit } = req.body;
     log = log.concat(entries);
@@ -219,11 +229,18 @@ app.post('/sync-log', (req, res) => {
     res.json({ success: true });
 });
 
-// --- Utility Endpoints ---
+// --- Utility & Telemetry Endpoints ---
+
+// Accessed by the Gateway for routing and the Observability Dashboard
 app.get('/status', (req, res) => {
-    res.json({ state, currentTerm, leaderId: currentLeader });
+    res.json({ 
+        state: state, 
+        currentTerm: currentTerm, 
+        leaderId: currentLeader 
+    });
 });
 
+// Accessed by the Gateway when a new client connects
 app.get('/full-log', (req, res) => {
     if (state !== 'Leader') return res.status(400).json({ error: "Not leader" });
     res.json({ log: log.slice(0, commitIndex + 1) });
