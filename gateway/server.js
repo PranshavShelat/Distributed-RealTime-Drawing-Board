@@ -31,7 +31,8 @@ wss.on('connection', async (ws) => {
 
     ws.on('message', async (message) => {
         const data = JSON.parse(message);
-        if (data.type === 'stroke') {
+        // NEW: Accept both single strokes and batched arrays
+        if (data.type === 'stroke' || data.type === 'stroke-batch') {
             await forwardToLeader(data);
         }
     });
@@ -39,10 +40,11 @@ wss.on('connection', async (ws) => {
 
 // --- Internal Endpoints (Called by Leader) ---
 app.post('/broadcast', (req, res) => {
-    const stroke = req.body;
+    const payload = req.body;
     wss.clients.forEach(client => {
         if (client.readyState === 1) {
-            client.send(JSON.stringify({ type: 'stroke', ...stroke }));
+            // NEW: Send the exact payload (maintains the 'stroke-batch' type)
+            client.send(JSON.stringify(payload)); 
         }
     });
     res.sendStatus(200);
@@ -82,7 +84,7 @@ async function forwardToLeader(stroke) {
         }
     } catch (e) {
         console.log(`Gateway: Leader ${leaderUrl} failed. Triggering failover.`);
-        currentLeader = null; // Invalidate leader and let next stroke find the new one
+        currentLeader = null; 
     }
 }
 
@@ -90,7 +92,6 @@ async function forwardToLeader(stroke) {
 setInterval(async () => {
     const clusterStatus = [];
     
-    // Ping all 3 replicas to check their state
     for (let i = 1; i <= 3; i++) {
         const replicaName = `replica${i}`;
         try {
@@ -102,7 +103,6 @@ setInterval(async () => {
                 status: '🟢'
             });
         } catch (e) {
-            // If the request fails or times out, the node is dead
             clusterStatus.push({
                 id: replicaName,
                 state: 'OFFLINE',
@@ -112,13 +112,12 @@ setInterval(async () => {
         }
     }
 
-    // Broadcast the health data to all connected browser clients
     const healthPayload = JSON.stringify({ type: 'health-check', data: clusterStatus });
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { // 1 means WebSocket is OPEN
+        if (client.readyState === 1) { 
             client.send(healthPayload);
         }
     });
-}, 2000); // Runs every 2 seconds
+}, 2000); 
 
 app.listen(HTTP_PORT, () => console.log(`Gateway listening on port ${HTTP_PORT}`));

@@ -22,13 +22,15 @@ let isEraser = false;
 let lastX = 0, lastY = 0;
 let remoteCursors = {}; 
 
+// NEW: Network Batching Buffer
+let strokeBuffer = [];
+
 let currentPenSize = parseInt(penSizeSlider.value);
 let currentEraserSize = parseInt(eraserSizeSlider.value);
 
 penSizeSlider.addEventListener('input', (e) => currentPenSize = parseInt(e.target.value));
 eraserSizeSlider.addEventListener('input', (e) => currentEraserSize = parseInt(e.target.value));
 
-// Toggle eraser state and UI visibility
 eraserBtn.addEventListener('click', () => {
     isEraser = !isEraser;
     eraserBtn.innerText = isEraser ? "Eraser (ON)" : "Eraser (Off)";
@@ -39,7 +41,6 @@ eraserBtn.addEventListener('click', () => {
     colorContainer.style.display = isEraser ? 'none' : 'inline-block';
 });
 
-// WebSocket Setup
 const wsUrl = `ws://${window.location.hostname}:8080`;
 const ws = new WebSocket(wsUrl);
 
@@ -53,46 +54,78 @@ ws.onmessage = (event) => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         data.log.forEach(entry => {
             const s = entry.stroke;
-            drawOnCanvas(s.startX, s.startY, s.endX, s.endY, s.color, s.isEraser, s.lineWidth);
+            
+            // Render old single strokes (Backwards compatibility)
+            if (s.type === 'stroke' || !s.type) {
+                drawOnCanvas(s.startX, s.startY, s.endX, s.endY, s.color, s.isEraser, s.lineWidth);
+            } 
+            // Render new batched strokes
+            else if (s.type === 'stroke-batch') {
+                s.batch.forEach(item => {
+                    drawOnCanvas(item.startX, item.startY, item.endX, item.endY, item.color, item.isEraser, item.lineWidth);
+                });
+            }
         });
-    } else if (data.type === 'stroke' && data.userName !== myUsername) {
+    } 
+    // Live single stroke (Legacy)
+    else if (data.type === 'stroke' && data.userName !== myUsername) {
         drawOnCanvas(data.startX, data.startY, data.endX, data.endY, data.color, data.isEraser, data.lineWidth);
         updateRemoteCursor(data.userName, data.endX, data.endY, data.color);
     } 
-    // --- Catch the health-check broadcast for the Dashboard ---
+    // NEW: Live batched strokes
+    else if (data.type === 'stroke-batch') {
+        data.batch.forEach(item => {
+            if (item.userName !== myUsername) {
+                drawOnCanvas(item.startX, item.startY, item.endX, item.endY, item.color, item.isEraser, item.lineWidth);
+                updateRemoteCursor(item.userName, item.endX, item.endY, item.color);
+            }
+        });
+    }
+    // Dashboard Telemetry
     else if (data.type === 'health-check') {
         const list = document.getElementById('cluster-list');
         if (list) {
             list.innerHTML = data.data.map(node => {
-                // Color code the states
                 let stateColor = "white";
-                if (node.state === 'Leader') stateColor = "#4CAF50"; // Green
-                if (node.state === 'Candidate') stateColor = "#FFC107"; // Yellow
-                if (node.state === 'OFFLINE') stateColor = "#F44336"; // Red
-
+                if (node.state === 'Leader') stateColor = "#4CAF50";
+                if (node.state === 'Candidate') stateColor = "#FFC107";
+                if (node.state === 'OFFLINE') stateColor = "#F44336";
                 return `<li>${node.status} <strong>${node.id.toUpperCase()}</strong>: <span style="color: ${stateColor};">${node.state}</span> (Term: ${node.term})</li>`;
             }).join('');
         }
     }
 };
 
-// Unified local draw and network emit logic
+// Unified local draw and buffer logic
 function emitAndDraw(currentX, currentY) {
     const currentColor = colorPicker.value;
     const currentWidth = isEraser ? currentEraserSize : currentPenSize;
 
+    // 1. Draw immediately on your own screen so it feels lag-free
     drawOnCanvas(lastX, lastY, currentX, currentY, currentColor, isEraser, currentWidth);
 
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'stroke', userName: myUsername,
-            startX: lastX, startY: lastY, endX: currentX, endY: currentY,
-            color: currentColor, isEraser: isEraser, lineWidth: currentWidth,
-            timestamp: Date.now()
-        }));
-    }
+    // 2. Push to buffer instead of sending immediately
+    strokeBuffer.push({
+        userName: myUsername,
+        startX: lastX, startY: lastY, endX: currentX, endY: currentY,
+        color: currentColor, isEraser: isEraser, lineWidth: currentWidth,
+        timestamp: Date.now()
+    });
+
     [lastX, lastY] = [currentX, currentY];
 }
+
+// --- The Batch Sender Loop ---
+// This runs 20 times a second. It grabs everything in the buffer, sends it as one giant payload, and empties the buffer.
+setInterval(() => {
+    if (strokeBuffer.length > 0 && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'stroke-batch',
+            batch: strokeBuffer
+        }));
+        strokeBuffer = []; 
+    }
+}, 50);
 
 // Mobile Touch Events
 function getTouchPos(canvas, touchEvent) {
@@ -154,7 +187,6 @@ function drawOnCanvas(x1, y1, x2, y2, color, isEraserMode, lineWidth) {
     ctx.closePath();
 }
 
-// Remote Cursor Tracking
 function updateRemoteCursor(userName, x, y, color) {
     if (!remoteCursors[userName]) {
         const el = document.createElement('div');
