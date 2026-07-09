@@ -9,13 +9,13 @@ const REPLICA_ID = process.env.REPLICA_ID;
 const PEERS = process.env.PEERS ? process.env.PEERS.split(',') : [];
 
 // RAFT State Variables
-let state = 'Follower'; // 'Follower', 'Candidate', 'Leader'
+let state = 'Follower'; 
 let currentTerm = 0;
 let votedFor = null;
 let currentLeader = null;
 
 // Log Variables
-let log = []; // Array of { term, stroke }
+let log = []; 
 let commitIndex = -1;
 
 // Timers
@@ -25,7 +25,6 @@ let heartbeatInterval = null;
 // --- RAFT Core Functions ---
 function resetElectionTimeout() {
     clearTimeout(electionTimeout);
-    // Randomized timeout between 500ms and 800ms to prevent split votes
     const timeout = Math.floor(Math.random() * (800 - 500 + 1) + 500);
     electionTimeout = setTimeout(startElection, timeout);
 }
@@ -37,7 +36,7 @@ async function startElection() {
     currentLeader = null;
     console.log(`[${REPLICA_ID}] Term ${currentTerm}: Started election`);
 
-    let votes = 1; // Vote for self
+    let votes = 1; 
     resetElectionTimeout();
 
     const votePromises = PEERS.map(async (peer) => {
@@ -53,14 +52,11 @@ async function startElection() {
             } else if (res.data.voteGranted) {
                 votes++;
             }
-        } catch (e) { 
-            // Peer is unreachable; ignore and continue
-        }
+        } catch (e) { /* Peer unreachable */ }
     });
 
     await Promise.all(votePromises);
 
-    // If we received a majority of votes, claim leadership
     if (state === 'Candidate' && votes > (PEERS.length + 1) / 2) {
         becomeLeader();
     }
@@ -72,7 +68,6 @@ function becomeLeader() {
     console.log(`[${REPLICA_ID}] Term ${currentTerm}: BECAME LEADER 👑`);
     clearTimeout(electionTimeout);
     
-    // Immediately send heartbeats to establish authority
     sendHeartbeats();
     heartbeatInterval = setInterval(sendHeartbeats, 150);
 }
@@ -95,12 +90,8 @@ async function sendHeartbeats() {
                 leaderCommit: commitIndex
             }, { timeout: 100 });
             
-            if (res.data.term > currentTerm) {
-                stepDown(res.data.term);
-            }
-        } catch (e) { 
-            // Peer is unreachable; ignore and continue
-        }
+            if (res.data.term > currentTerm) stepDown(res.data.term);
+        } catch (e) { /* Peer down */ }
     });
 }
 
@@ -114,27 +105,28 @@ async function syncFollower(peer, followerLogLength) {
             entries: missingEntries,
             leaderCommit: commitIndex
         });
-    } catch (e) {
-        console.error(`[${REPLICA_ID}] Failed to sync peer ${peer}`);
-    }
+    } catch (e) { console.error(`[${REPLICA_ID}] Failed to sync peer ${peer}`); }
 }
 
 // --- RPC Endpoints ---
 
-// 1. Client Request (Receives stroke from Gateway)
+// 1. Client Request (Receives stroke or command from Gateway)
 app.post('/client-request', async (req, res) => {
-    if (state !== 'Leader') {
-        return res.json({ success: false, leaderId: currentLeader });
-    }
+    if (state !== 'Leader') return res.json({ success: false, leaderId: currentLeader });
 
     const stroke = req.body;
     const entry = { term: currentTerm, stroke };
+
+    // Log Compaction: Wipe server memory if CLEAR command issued
+    if (stroke.type === 'clear') {
+        log = []; 
+    }
+    
     log.push(entry);
     const entryIndex = log.length - 1;
+    let acks = 1; 
 
-    let acks = 1; // Self ack
-
-    // Replicate to followers (2-Phase Commit)
+    // Phase 2: Replicate to followers
     const replicationPromises = PEERS.map(async (peer) => {
         try {
             const res = await axios.post(`http://${peer}:3000/append-entries`, {
@@ -147,25 +139,18 @@ app.post('/client-request', async (req, res) => {
             if (res.data.success) {
                 acks++;
             } else if (res.data.needsSync) {
-                // Follower log is shorter, trigger catch-up protocol
                 syncFollower(peer, res.data.logLength);
             }
-        } catch (e) { 
-            // Peer is down; ignore and continue
-        }
+        } catch (e) { /* Peer down */ }
     });
 
     await Promise.all(replicationPromises);
 
-    // Commit only if majority consensus is reached
+    // Phase 3: Commit
     if (acks > (PEERS.length + 1) / 2) {
         commitIndex = entryIndex;
-        // Broadcast to Gateway so clients can render it
-        try {
-            await axios.post('http://gateway:8081/broadcast', stroke);
-        } catch (e) { 
-            console.error(`[${REPLICA_ID}] Gateway broadcast failed`); 
-        }
+        try { await axios.post('http://gateway:8081/broadcast', stroke); } 
+        catch (e) { console.error(`[${REPLICA_ID}] Gateway broadcast failed`); }
         return res.json({ success: true });
     } else {
         return res.status(500).json({ success: false, error: "Consensus not reached" });
@@ -203,24 +188,28 @@ app.post('/heartbeat', (req, res) => {
     res.json({ term: currentTerm });
 });
 
-// 4. Append Entries (Live stroke replication)
+// 4. Append Entries (Live replication & state enforcement)
 app.post('/append-entries', (req, res) => {
     const { term, leaderId, entry, prevLogIndex } = req.body;
     
     if (term < currentTerm) return res.json({ success: false });
     stepDown(term, leaderId);
 
-    // Mini-RAFT Consistency Check
+    // Consistency Check
     if (prevLogIndex >= log.length) {
-        // Follower is missing data, ask leader to trigger /sync-log
         return res.json({ success: false, needsSync: true, logLength: log.length });
+    }
+
+    // Log Compaction for Followers
+    if (entry.stroke && entry.stroke.type === 'clear') {
+        log = []; 
     }
 
     log.push(entry);
     res.json({ success: true, term: currentTerm });
 });
 
-// 5. Sync Log (Catch-up protocol for restarted nodes)
+// 5. Sync Log (Catch-up protocol)
 app.post('/sync-log', (req, res) => {
     const { entries, leaderCommit } = req.body;
     log = log.concat(entries);
@@ -230,23 +219,15 @@ app.post('/sync-log', (req, res) => {
 });
 
 // --- Utility & Telemetry Endpoints ---
-
-// Accessed by the Gateway for routing and the Observability Dashboard
 app.get('/status', (req, res) => {
-    res.json({ 
-        state: state, 
-        currentTerm: currentTerm, 
-        leaderId: currentLeader 
-    });
+    res.json({ state: state, currentTerm: currentTerm, leaderId: currentLeader });
 });
 
-// Accessed by the Gateway when a new client connects
 app.get('/full-log', (req, res) => {
     if (state !== 'Leader') return res.status(400).json({ error: "Not leader" });
     res.json({ log: log.slice(0, commitIndex + 1) });
 });
 
-// Startup
 app.listen(PORT, () => {
     console.log(`[${REPLICA_ID}] Started. Peers: ${PEERS.join(', ')}`);
     resetElectionTimeout();

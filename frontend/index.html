@@ -22,6 +22,8 @@
         }
         button:hover { background: #45a049; }
         button.active { background: #E74C3C; }
+        #clearBtn { background: #E74C3C; }
+        #clearBtn:hover { background: #c0392b; }
         
         #canvas-wrapper { position: relative; margin-top: 20px; }
         canvas { background: white; box-shadow: 0 8px 24px rgba(0,0,0,0.4); cursor: crosshair; border-radius: 4px; }
@@ -43,11 +45,12 @@
         
         <button id="eraserBtn">Eraser (OFF)</button>
         <label id="eraserSizeContainer" style="display: none; margin-left: 5px;">Eraser Size: <input type="range" id="eraserSize" min="5" max="50" value="20" style="vertical-align: middle;"></label>
+        
+        <button id="clearBtn">Clear Canvas</button>
     </div>
 
     <div id="status">Connecting to Cluster...</div>
 
-    <!-- Observability Dashboard -->
     <div id="observability-panel" style="position: absolute; top: 20px; right: 20px; background: rgba(30, 30, 30, 0.9); padding: 15px; border-radius: 8px; border: 1px solid #555; box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-family: monospace; z-index: 100;">
         <h3 style="margin: 0 0 10px 0; color: #4CAF50; text-align: center; border-bottom: 1px solid #555; padding-bottom: 5px;">Cluster Health</h3>
         <ul id="cluster-list" style="list-style-type: none; padding: 0; margin: 0; font-size: 14px; line-height: 1.8;">

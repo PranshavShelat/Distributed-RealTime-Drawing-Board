@@ -31,9 +31,22 @@ wss.on('connection', async (ws) => {
 
     ws.on('message', async (message) => {
         const data = JSON.parse(message);
-        // NEW: Accept both single strokes and batched arrays
-        if (data.type === 'stroke' || data.type === 'stroke-batch') {
-            await forwardToLeader(data);
+        
+        // Accept single strokes, batches, and state machine 'clear' commands
+        if (data.type === 'stroke' || data.type === 'stroke-batch' || data.type === 'clear') {
+            const success = await forwardToLeader(data);
+            
+            // Ghost Stroke Fix: If the leader crashed before achieving quorum, force UI sync
+            if (!success) {
+                console.log("Gateway: Notifying client of dropped state. Forcing UI sync.");
+                const activeLeader = await getActiveLeader();
+                if (activeLeader) {
+                    try {
+                        const res = await axios.get(`${activeLeader}/full-log`);
+                        ws.send(JSON.stringify({ type: 'sync', log: res.data.log }));
+                    } catch (err) { /* Will retry on next UI interaction */ }
+                }
+            }
         }
     });
 });
@@ -43,7 +56,6 @@ app.post('/broadcast', (req, res) => {
     const payload = req.body;
     wss.clients.forEach(client => {
         if (client.readyState === 1) {
-            // NEW: Send the exact payload (maintains the 'stroke-batch' type)
             client.send(JSON.stringify(payload)); 
         }
     });
@@ -69,22 +81,26 @@ async function getActiveLeader() {
     return null;
 }
 
+// Forward to Leader now returns Boolean status for UI Sync validation
 async function forwardToLeader(stroke) {
     const leaderUrl = await getActiveLeader();
     if (!leaderUrl) {
         console.log("Gateway: No active leader found, dropping stroke.");
-        return;
+        return false;
     }
 
     try {
         const res = await axios.post(`${leaderUrl}/client-request`, stroke, { timeout: 1000 });
         if (!res.data.success && res.data.leaderId) {
+            // Cache invalidation & retry
             currentLeader = `http://${res.data.leaderId}:3000`;
-            await forwardToLeader(stroke); // Retry with new leader
+            return await forwardToLeader(stroke); 
         }
+        return true; 
     } catch (e) {
         console.log(`Gateway: Leader ${leaderUrl} failed. Triggering failover.`);
         currentLeader = null; 
+        return false; 
     }
 }
 
@@ -103,20 +119,13 @@ setInterval(async () => {
                 status: '🟢'
             });
         } catch (e) {
-            clusterStatus.push({
-                id: replicaName,
-                state: 'OFFLINE',
-                term: '-',
-                status: '🔴'
-            });
+            clusterStatus.push({ id: replicaName, state: 'OFFLINE', term: '-', status: '🔴' });
         }
     }
 
     const healthPayload = JSON.stringify({ type: 'health-check', data: clusterStatus });
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { 
-            client.send(healthPayload);
-        }
+        if (client.readyState === 1) client.send(healthPayload);
     });
 }, 2000); 
 
