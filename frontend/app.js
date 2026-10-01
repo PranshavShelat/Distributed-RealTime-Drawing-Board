@@ -1,3 +1,4 @@
+// DOM element references
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const statusDiv = document.getElementById('status');
@@ -14,10 +15,12 @@ const eraserSizeContainer = document.getElementById('eraserSizeContainer');
 const clearBtn = document.getElementById('clearBtn');
 const usernameInput = document.getElementById('usernameInput');
 
+// Random default username, editable by the user
 let myUsername = "User-" + Math.floor(Math.random() * 1000);
 usernameInput.value = myUsername;
 usernameInput.addEventListener('change', (e) => myUsername = e.target.value);
 
+// Drawing state and remote cursor tracking
 let isDrawing = false;
 let isEraser = false;
 let lastX = 0, lastY = 0;
@@ -26,12 +29,14 @@ let remoteCursors = {};
 // Network Batching Buffer
 let strokeBuffer = [];
 
+// Pen and eraser sizes, kept in sync with the sliders
 let currentPenSize = parseInt(penSizeSlider.value);
 let currentEraserSize = parseInt(eraserSizeSlider.value);
 
 penSizeSlider.addEventListener('input', (e) => currentPenSize = parseInt(e.target.value));
 eraserSizeSlider.addEventListener('input', (e) => currentEraserSize = parseInt(e.target.value));
 
+// Toggle eraser mode and swap which controls are visible
 eraserBtn.addEventListener('click', () => {
     isEraser = !isEraser;
     eraserBtn.innerText = isEraser ? "Eraser (ON)" : "Eraser (Off)";
@@ -56,6 +61,7 @@ clearBtn.addEventListener('click', () => {
     }
 });
 
+// Handle messages from the gateway: sync, clear, strokes and health
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     
@@ -137,11 +143,13 @@ setInterval(() => {
 }, 50);
 
 // Mobile Touch Events
+// Convert a touch event to canvas coordinates
 function getTouchPos(canvas, touchEvent) {
     const rect = canvas.getBoundingClientRect();
     return { x: touchEvent.touches[0].clientX - rect.left, y: touchEvent.touches[0].clientY - rect.top };
 }
 
+// Start, continue and end a stroke on touch
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
     isDrawing = true;
@@ -158,6 +166,7 @@ canvas.addEventListener('touchmove', (e) => {
 canvas.addEventListener('touchend', () => isDrawing = false);
 
 // Desktop Mouse Events
+// Start, continue and end a stroke with the mouse
 canvas.addEventListener('mousedown', (e) => {
     isDrawing = true;
     [lastX, lastY] = [e.offsetX, e.offsetY];
@@ -170,6 +179,7 @@ canvas.addEventListener('mouseup', () => isDrawing = false);
 canvas.addEventListener('mouseout', () => isDrawing = false);
 
 // Rendering Engine
+// Draw one line segment; eraser mode cuts pixels out instead
 function drawOnCanvas(x1, y1, x2, y2, color, isEraserMode, lineWidth) {
     ctx.beginPath();
     ctx.moveTo(x1, y1);
@@ -188,6 +198,7 @@ function drawOnCanvas(x1, y1, x2, y2, color, isEraserMode, lineWidth) {
     ctx.closePath();
 }
 
+// Show or move a remote user's name tag, fading it after 1.5s idle
 function updateRemoteCursor(userName, x, y, color) {
     if (!remoteCursors[userName]) {
         const el = document.createElement('div');

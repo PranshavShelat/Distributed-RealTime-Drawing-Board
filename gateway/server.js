@@ -1,17 +1,21 @@
+// Dependencies
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const axios = require('axios');
 const path = require('path');
 
+// Ports and replica addresses on the Docker network
 const HTTP_PORT = 8081;
 const WS_PORT = 8080;
 const REPLICAS = ['http://replica1:3000', 'http://replica2:3000', 'http://replica3:3000'];
 
+// Cached leader URL and Express app that serves the frontend
 let currentLeader = null;
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// WebSocket server for browser clients
 const wss = new WebSocketServer({ port: WS_PORT });
 
 // --- Client Connections ---
@@ -29,6 +33,7 @@ wss.on('connection', async (ws) => {
         }
     }
 
+    // Forward drawing commands from this client to the leader
     ws.on('message', async (message) => {
         const data = JSON.parse(message);
         
@@ -52,6 +57,7 @@ wss.on('connection', async (ws) => {
 });
 
 // --- Internal Endpoints (Called by Leader) ---
+// Push a committed stroke to every connected client
 app.post('/broadcast', (req, res) => {
     const payload = req.body;
     wss.clients.forEach(client => {
@@ -63,6 +69,7 @@ app.post('/broadcast', (req, res) => {
 });
 
 // --- Routing Logic ---
+// Return the cached leader, or find it by polling each replica's /status
 async function getActiveLeader() {
     if (currentLeader) return currentLeader;
     
@@ -105,6 +112,7 @@ async function forwardToLeader(stroke) {
 }
 
 // --- Cluster Health Monitor ---
+// Every 2s, poll each replica's status and push it to all clients
 setInterval(async () => {
     const clusterStatus = [];
     
@@ -129,4 +137,5 @@ setInterval(async () => {
     });
 }, 2000); 
 
+// Start the HTTP server (frontend + internal endpoints)
 app.listen(HTTP_PORT, () => console.log(`Gateway listening on port ${HTTP_PORT}`));

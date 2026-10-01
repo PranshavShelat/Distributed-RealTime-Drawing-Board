@@ -1,9 +1,11 @@
+// Dependencies and Express app setup
 const express = require('express');
 const axios = require('axios');
 
 const app = express();
 app.use(express.json());
 
+// Node identity and cluster peers (from docker-compose env)
 const PORT = 3000;
 const REPLICA_ID = process.env.REPLICA_ID;
 const PEERS = process.env.PEERS ? process.env.PEERS.split(',') : [];
@@ -23,12 +25,14 @@ let electionTimeout = null;
 let heartbeatInterval = null;
 
 // --- RAFT Core Functions ---
+// Restart the election timer with a random 500-800ms timeout
 function resetElectionTimeout() {
     clearTimeout(electionTimeout);
     const timeout = Math.floor(Math.random() * (800 - 500 + 1) + 500);
     electionTimeout = setTimeout(startElection, timeout);
 }
 
+// Become a candidate, bump the term and ask peers for votes
 async function startElection() {
     state = 'Candidate';
     currentTerm++;
@@ -62,6 +66,7 @@ async function startElection() {
     }
 }
 
+// Take over as leader and start sending heartbeats every 150ms
 function becomeLeader() {
     state = 'Leader';
     currentLeader = REPLICA_ID;
@@ -72,6 +77,7 @@ function becomeLeader() {
     heartbeatInterval = setInterval(sendHeartbeats, 150);
 }
 
+// Revert to follower in the given term and stop sending heartbeats
 function stepDown(newTerm, leaderId = null) {
     currentTerm = newTerm;
     state = 'Follower';
@@ -81,6 +87,7 @@ function stepDown(newTerm, leaderId = null) {
     resetElectionTimeout();
 }
 
+// Tell every peer the leader is alive and share the commit index
 async function sendHeartbeats() {
     PEERS.forEach(async (peer) => {
         try {
@@ -96,6 +103,7 @@ async function sendHeartbeats() {
 }
 
 // --- Catch-up Protocol ---
+// Send a lagging follower every log entry it is missing
 async function syncFollower(peer, followerLogLength) {
     if (state !== 'Leader') return;
     try {
@@ -219,15 +227,18 @@ app.post('/sync-log', (req, res) => {
 });
 
 // --- Utility & Telemetry Endpoints ---
+// Report this node's role, term and known leader
 app.get('/status', (req, res) => {
     res.json({ state: state, currentTerm: currentTerm, leaderId: currentLeader });
 });
 
+// Return all committed entries (leader only) for client sync
 app.get('/full-log', (req, res) => {
     if (state !== 'Leader') return res.status(400).json({ error: "Not leader" });
     res.json({ log: log.slice(0, commitIndex + 1) });
 });
 
+// Start the server and arm the first election timer
 app.listen(PORT, () => {
     console.log(`[${REPLICA_ID}] Started. Peers: ${PEERS.join(', ')}`);
     resetElectionTimeout();
